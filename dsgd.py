@@ -49,16 +49,15 @@ if __name__ == '__main__':
     start_time = time.time()
 
     # row / col sizes are max user / movie index
-    # TODO:
-    row_number = ratings.max(key=itemgetter(0))[0] + 1
-    col_number = ratings.max(key=itemgetter(1))[1] + 1
+    row_number = ratings.max(key=itemgetter(0))[0]
+    col_number = ratings.max(key=itemgetter(1))[1]
 
     # build W and H
     user_factor = rand(row_number, num_factors)
     movie_factor = rand(col_number, num_factors)
 
     # slice ratings matrix to column groups
-    # TODO: what if not exact division
+    # TODO: what if not exact division?
     block_column_size = col_number / num_workers
     block_row_size = row_number / num_workers
 
@@ -66,9 +65,8 @@ if __name__ == '__main__':
 
     def in_strata(rating_entry):
         user, movie, _ = rating_entry
-        # TODO
-        column_group = (movie - 0) / block_column_size
-        return (strata[column_group] * block_row_size <= (user - 0) <
+        column_group = (movie - 1) / block_column_size
+        return (strata[column_group] * block_row_size <= (user - 1) <
                 (strata[column_group] + 1) * block_row_size)
 
     def update(group, u_f_p, m_f_p):
@@ -83,19 +81,18 @@ if __name__ == '__main__':
 
         for user, movie, rating in rating_entries:
             # transform real indexes to partitioned factor matrix indexes
-            # TODO
-            user_index = (user - 0) % block_row_size
-            movie_index = (movie - 0) % block_column_size
+            user_index = (user - 1) % block_row_size
+            movie_index = (movie - 1) % block_column_size
 
             pred_rating = np.dot(u_f_p[user_index, :], m_f_p[movie_index, :])
 
             # TODO: add regularization terms
             u_gradient = -2 * (rating - pred_rating) * m_f_p[movie_index, :] + \
-                         2 * lambda_value / col_number * u_f_p[user_index, :]
+                        2 * lambda_value / col_number * u_f_p[user_index, :]
             u_f_p[user_index, :] -= beta_value * u_gradient
 
             m_gradient = -2 * (rating - pred_rating) * u_f_p[user_index, :] + \
-                         2 * lambda_value / row_number * m_f_p[movie_index, :]
+                        2 * lambda_value / row_number * m_f_p[movie_index, :]
             m_f_p[movie_index, :] -= beta_value * m_gradient
 
         return column_group, (u_f_p, m_f_p)
@@ -107,7 +104,7 @@ if __name__ == '__main__':
 
         updated = ratings \
             .filter(lambda r: in_strata(r)) \
-            .groupBy(lambda r: r[1] / block_column_size, num_workers) \
+            .groupBy(lambda r: (r[1] - 1) / block_column_size, num_workers) \
             .map(lambda group: update(group,
                                       user_factors[strata[group[0]]],
                                       movie_factors[group[0]]), True) \
@@ -127,19 +124,19 @@ if __name__ == '__main__':
         strata.append(strata.pop(0))
 
     # do simple evaluation
-    end_time = time.time()
-    pred_ratings = np.dot(user_factor, movie_factor.T)
-    rmse, rating_count = 0.0, 0
-    for u, m, r in ratings.collect():
-        rmse += (r - pred_ratings[u, m]) ** 2
-        rating_count += 1
-
-    sc.stop()
-
-    rmse = np.sqrt(rmse / rating_count)
-    print
-    print 'RMSE: ' + str(rmse)
-    print 'time usage: %s seconds' % (end_time - start_time)
+    # end_time = time.time()
+    # pred_ratings = np.dot(user_factor, movie_factor.T)
+    # rmse, rating_count = 0.0, 0
+    # for u, m, r in ratings.collect():
+    #     rmse += (r - pred_ratings[u - 1, m - 1]) ** 2
+    #     rating_count += 1
+    #
+    # sc.stop()
+    #
+    # rmse = np.sqrt(rmse / rating_count)
+    # print
+    # print 'RMSE: ' + str(rmse)
+    # print 'time usage: %s seconds' % (end_time - start_time)
 
     # write parameters
     with open(outputW_filepath, 'wb') as f:
@@ -147,5 +144,5 @@ if __name__ == '__main__':
             f.write(','.join(map(str, row)) + '\n')
 
     with open(outputH_filepath, 'wb') as f:
-        for row in movie_factor:
+        for row in movie_factor.T:
             f.write(','.join(map(str, row)) + '\n')
