@@ -57,10 +57,20 @@ if __name__ == '__main__':
     u_factor = rand(row_num, num_factors)
     m_factor = rand(col_num, num_factors)
 
+    # extract info for strata/blocks
     blk_col_size = (col_num - 1) / num_workers + 1
     blk_row_size = (row_num - 1) / num_workers + 1
 
     strata = range(num_workers)
+
+    # calculate regularization counts
+    # TODO: more efficient ways?
+    rating_per_row = dict(ratings.groupBy(itemgetter(0)) \
+                                 .mapValues(len) \
+                                 .collect())
+    rating_per_col = dict(ratings.groupBy(itemgetter(1)) \
+                                 .mapValues(len) \
+                                 .collect())
 
     def in_strata(rating_entry):
         user, movie, _ = rating_entry
@@ -90,13 +100,14 @@ if __name__ == '__main__':
 
             pred_rating = np.dot(u_f_p[user_index, :], m_f_p[movie_index, :])
 
-            # TODO: add regularization terms
-            u_gradient = -2 * (rating - pred_rating) * m_f_p[movie_index, :]# + \
-                        # 2 * lambda_value / col_number * u_f_p[user_index, :]
+            u_gradient = -2 * (rating - pred_rating) * m_f_p[movie_index, :] + \
+                        2 * lambda_value / rating_per_row[user] * \
+                        u_f_p[user_index, :]
             u_f_p[user_index, :] -= beta_value * u_gradient
 
-            m_gradient = -2 * (rating - pred_rating) * u_f_p[user_index, :]# + \
-                        # 2 * lambda_value / row_number * m_f_p[movie_index, :]
+            m_gradient = -2 * (rating - pred_rating) * u_f_p[user_index, :] + \
+                        2 * lambda_value / rating_per_col[movie] * \
+                        m_f_p[movie_index, :]
             m_f_p[movie_index, :] -= beta_value * m_gradient
 
         return col_group, u_f_p, m_f_p
