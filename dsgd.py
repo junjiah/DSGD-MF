@@ -65,11 +65,11 @@ if __name__ == '__main__':
 
     # calculate regularization counts
     # TODO: more efficient ways?
-    rating_per_row = dict(ratings.groupBy(itemgetter(0)) \
-                                 .mapValues(len) \
+    rating_per_row = dict(ratings.groupBy(itemgetter(0))
+                                 .mapValues(len)
                                  .collect())
-    rating_per_col = dict(ratings.groupBy(itemgetter(1)) \
-                                 .mapValues(len) \
+    rating_per_col = dict(ratings.groupBy(itemgetter(1))
+                                 .mapValues(len)
                                  .collect())
 
     def in_strata(rating_entry):
@@ -78,6 +78,14 @@ if __name__ == '__main__':
         return (strata[col_group] * blk_row_size <= (user - 1) <
                 (strata[col_group] + 1) * blk_row_size)
 
+    def calculate_loss(pred_rating, true_rating):
+        error = 0.0
+        for u, m, r in true_rating:
+            error += (r - pred_rating[u - 1, m - 1]) ** 2
+
+        print 'loss: %f, RMSE: %f' % (error,
+                                      np.sqrt(error / len(true_rating)))
+
     def update(group, row_start, col_start):
         """
         Update the incoming user/movie factor matrix with given rating entries
@@ -85,7 +93,7 @@ if __name__ == '__main__':
         :param row_start: starting index of this user partition
         :param col_start: starting index of this movie partition
         :return: a tuple of user factor matrix and movie factor matrix, using
-                 the column number as key
+                 the column group number as key
         """
         col_group, rating_entries = group
 
@@ -112,7 +120,7 @@ if __name__ == '__main__':
 
         return col_group, u_f_p, m_f_p
 
-    for _ in range(num_iterations):
+    for i in range(num_iterations):
         # note in map, `preservesPartitioning` is True
         updated = ratings \
             .filter(lambda r: in_strata(r)) \
@@ -134,24 +142,18 @@ if __name__ == '__main__':
 
         # shift the strata
         strata.append(strata.pop(0))
+        # output evaluation results
+        print
+        print 'iteration: %d' % i
+        calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     # do simple evaluation
-    end_time = time.time()
-    pred_ratings = np.dot(u_factor, m_factor.T)
-    rmse, rating_count = 0.0, 0
-    for u, m, r in ratings.collect():
-        rmse += (r - pred_ratings[u - 1, m - 1]) ** 2
-        rating_count += 1
+    print
+    print
+    print 'time usage: %s seconds' % (time.time() - start_time)
+    calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
-    loss = rmse
-    rmse = np.sqrt(rmse / rating_count)
-    print
-    print
-    print 'RMSE: ' + str(rmse)
-    print 'loss: ' + str(loss)
-    print 'time usage: %s seconds' % (end_time - start_time)
-
     # write parameters
     with open(outputW_filepath, 'wb') as f:
         for row in u_factor:
