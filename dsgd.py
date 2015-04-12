@@ -4,8 +4,7 @@ import sys
 import numpy as np
 
 from numpy.random import rand
-from operator import itemgetter
-from pyspark import SparkContext, SparkConf, AccumulatorParam
+from pyspark import SparkContext, SparkConf
 import time
 
 
@@ -105,15 +104,11 @@ if __name__ == '__main__':
     print 'collected corpus statistics, row num: %d, col num: %d' % (row_num,
                                                                      col_num)
 
-    # build W and H
-    u_factor = rand(row_num, num_factors)
-    m_factor = rand(col_num, num_factors)
-
     # extract info for strata/blocks
     blk_col_size = (col_num - 1) / num_workers + 1
     blk_row_size = (row_num - 1) / num_workers + 1
 
-    # add N_i, N_j for each rating entry
+    # # add N_i, N_j for each rating entry
     rating_per_user_b = sc.broadcast(rating_per_user)
     rating_per_movie_b = sc.broadcast(rating_per_movie)
 
@@ -124,6 +119,22 @@ if __name__ == '__main__':
                                       rating_per_user_b.value[r[0]],
                                       rating_per_movie_b.value[r[1]]))) \
         .cache()
+
+    # build W and H, keyed on their groups
+    W, H = rand(row_num, num_factors), rand(col_num, num_factors)
+    u_factor, m_factor = [], []
+    for i in range(num_workers):
+        u_factor.append(W[i * blk_row_size:(i + 1) * blk_row_size, :])
+    for i in range(num_workers):
+        m_factor.append(H[i * blk_col_size:(i + 1) * blk_col_size, :])
+    # clear W, H to prevent later references
+    W, H = None, None
+
+    u_factor = sc.parallelize(enumerate(u_factor))
+    m_factor = sc.parallelize(enumerate(m_factor))
+
+    strata = range(num_workers)
+    rev_strata_map = range(num_workers)
 
     strata = range(num_workers)
 
@@ -141,94 +152,67 @@ if __name__ == '__main__':
         print 'loss: %f, RMSE: %f' % (error,
                                       np.sqrt(error / len(true_rating)))
 
-    def update(partition):
-        # """
-        # Update the incoming user/movie factor matrix with given rating entries
-        # :param group: column group number and rating entries
-        # :param row_start: starting index of this user partition
-        # :param col_start: starting index of this movie partition
-        # :return: a tuple of user factor matrix and movie factor matrix, using
-        # the column group number as key
-        # """
+    def update(val):
+        rating_entries, u_f_p, m_f_p = val
+        u_f_p = u_f_p.data[0]
+        m_f_p = m_f_p.data[0]
+        # ratings could be None
+        if rating_entries.data:
+            for user, movie, rating, num_rated_m, num_rated_u in rating_entries:
+                # transform real indexes to partitioned factor matrix indexes
+                user_index = (user - 1) % blk_row_size
+                movie_index = (movie - 1) % blk_col_size
 
-        # partition of user/movie factor matrix
-        u_f_p, m_f_p = None, None
-        group = -1
-        i = 0
-        # n = 0
-        learning_rate = pow(TAO_0 + 0, -beta_value)
+                pred_rating = np.dot(u_f_p[user_index, :], m_f_p[movie_index, :])
 
-        for col_group, (u, m, r, num_u_rating, num_m_rating) in partition:
-            if u_f_p is None:
-                group = col_group
-                row_start = strata[col_group] * blk_row_size
-                col_start = col_group * blk_col_size
-                u_f_p = u_factor_b.value[row_start:row_start + blk_row_size, :]
-                m_f_p = m_factor_b.value[col_start:col_start + blk_col_size, :]
+                u_gradient = -2 * (rating - pred_rating) * m_f_p[movie_index, :] + \
+                            2 * lambda_value / num_rated_m * \
+                            u_f_p[user_index, :]
+                u_f_p[user_index, :] -= beta_value * u_gradient
 
-            # transform real indexes to partitioned factor matrix indexes
-            user_index = (u - 1) % blk_row_size
-            movie_index = (m - 1) % blk_col_size
+                m_gradient = -2 * (rating - pred_rating) * u_f_p[user_index, :] + \
+                            2 * lambda_value / num_rated_u * \
+                            m_f_p[movie_index, :]
+                m_f_p[movie_index, :] -= beta_value * m_gradient
 
-            pred_rating = np.dot(u_f_p[user_index, :], m_f_p[movie_index, :])
+        return u_f_p, m_f_p
 
-            u_gradient = -2 * (r - pred_rating) * m_f_p[movie_index, :] + \
-                         2 * lambda_value / num_u_rating * \
-                         u_f_p[user_index, :]
-            # tmp = pow(TAO_0 + n + i, -beta_value)
-            u_f_p[user_index, :] -= learning_rate * \
-                                    u_gradient
-
-            m_gradient = -2 * (r - pred_rating) * u_f_p[user_index, :] + \
-                         2 * lambda_value / num_m_rating * \
-                         m_f_p[movie_index, :]
-            m_f_p[movie_index, :] -= learning_rate * \
-                                     m_gradient
-
-            i += 1
-
-        yield group, u_f_p, m_f_p, i
-
-    # running DSGD!
-    n = 0
-    for main_iter in range(num_iterations):
-
-        u_factor_b = sc.broadcast(u_factor)
-        m_factor_b = sc.broadcast(m_factor)
-
-        # note in map, `preservesPartitioning` is True
+    for i in range(num_iterations):
         updated = ratings \
             .filter(lambda r: in_strata(r)) \
-            .partitionBy(num_workers) \
-            .mapPartitions(update) \
+            .groupWith(u_factor.map(lambda f: (rev_strata_map[f[0]], f[1])),
+                       m_factor) \
+            .mapValues(update) \
             .collect()
 
         # aggregate the updates
-        for column_group, updated_u_f, updated_m_f, block_i in updated:
-            if column_group == -1:
-                continue
-            update_start = strata[column_group] * blk_row_size
-            update_end = (strata[column_group] + 1) * blk_row_size
-            u_factor[update_start:update_end, :] = updated_u_f
+        u_factor, m_factor = [-1] * num_workers, [-1] *num_workers
+        for column_group, (updated_u_f, updated_m_f) in updated:
+            u_factor[strata[column_group]] = updated_u_f
+            m_factor[column_group] = updated_m_f
 
-            update_start = column_group * blk_col_size
-            update_end = (column_group + 1) * blk_col_size
-            m_factor[update_start:update_end, :] = updated_m_f
+        # output evaluation results
+        print
+        print 'iteration: %d' % i
+        calculate_loss(np.dot(np.vstack(u_factor), np.vstack(m_factor).T),
+                       ratings.collect())
 
-            n += block_i
+        if i != num_iterations - 1:
+            u_factor = sc.parallelize(enumerate(u_factor))
+            m_factor = sc.parallelize(enumerate(m_factor))
+
+            # n += block_i
 
         # shift the strata
         strata.append(strata.pop(0))
-        # output evaluation results
-        print
-        print 'iteration: %d' % main_iter
-        # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+        rev_strata_map.insert(0, rev_strata_map.pop())
 
     # do simple evaluation
     print
     print
     print 'time usage: %s seconds' % (time.time() - start_time)
-    calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+    calculate_loss(np.dot(np.vstack(u_factor), np.vstack(m_factor).T),
+                   ratings.collect())
 
     sc.stop()
     # write parameters
