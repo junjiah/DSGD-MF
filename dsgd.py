@@ -208,6 +208,7 @@ if __name__ == '__main__':
     print
     print
     print 'time usage: %s seconds' % (time.time() - start_time)
+    # TODO: try another way to calculate the loss
     calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
