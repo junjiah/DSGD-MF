@@ -31,10 +31,6 @@ def get_rating(file_content):
     return ratings
 
 
-def extract_stats(stats, rating_entry):
-    pass
-
-
 if __name__ == '__main__':
     # read command line arguments
     num_factors, num_workers, num_iterations = map(int, sys.argv[1:4])
@@ -43,12 +39,7 @@ if __name__ == '__main__':
 
     TAO_0 = 100
 
-    conf = SparkConf()
-    conf.set('spark.executor.memory', '20g')
-    conf.set('spark.driver.memory', '20g')
-
-    sc = SparkContext('local[8]', 'Distributed Stochastic Gradient Descent',
-                      conf=conf)
+    sc = SparkContext('local[8]', 'Distributed Stochastic Gradient Descent')
 
     if os.path.isfile(inputV_filepath):
         ratings = sc.textFile(inputV_filepath).map(
@@ -72,7 +63,7 @@ if __name__ == '__main__':
 
     def count_stats(v, stat):
         if type(v) == list or type(v) == tuple:
-            # this is an movie entry
+            # this is an rating entry
             u, m, _ = v
             if u > stat['row_num']:
                 stat['row_num'] = u
@@ -116,7 +107,6 @@ if __name__ == '__main__':
     # add N_i, N_j for each rating entry
     rating_per_user_b = sc.broadcast(rating_per_user)
     rating_per_movie_b = sc.broadcast(rating_per_movie)
-
     # map to :(<col-group>, (<u> <m> <r> <N_i> <N_j>))
     ratings = ratings.map(lambda r: ((r[1] - 1) / blk_col_size,
                                      # value is a 5-element tuple
@@ -125,9 +115,15 @@ if __name__ == '__main__':
                                       rating_per_movie_b.value[r[1]]))) \
         .cache()
 
+    # shipped to workers when necessary, this is small so not necessary
+    # to broadcast
     strata = range(num_workers)
 
     def in_strata(rating_entry):
+        """
+        A function to keep ratings inside the current strata.
+        Note the `strata` is automatically copied.
+        """
         col_group = rating_entry[0]
         user = rating_entry[1][0]
         return (strata[col_group] * blk_row_size <= (user - 1) <
@@ -141,66 +137,50 @@ if __name__ == '__main__':
         print 'loss: %f, RMSE: %f' % (error,
                                       np.sqrt(error / len(true_rating)))
 
-    def update(partition):
-        # """
-        # Update the incoming user/movie factor matrix with given rating entries
-        # :param group: column group number and rating entries
-        # :param row_start: starting index of this user partition
-        # :param col_start: starting index of this movie partition
-        # :return: a tuple of user factor matrix and movie factor matrix, using
-        # the column group number as key
-        # """
+    def update(col_group, partition):
+        row_start = strata[col_group] * blk_row_size
+        col_start = col_group * blk_col_size
 
-        # partition of user/movie factor matrix
-        u_f_p, m_f_p = None, None
-        group = -1
-        i = 0
-        # n = 0
-        learning_rate = pow(TAO_0 + 0, -beta_value)
+        u_f_p = u_factor_b.value[row_start:row_start + blk_row_size, :]
+        m_f_p = m_factor_b.value[col_start:col_start + blk_col_size, :]
 
-        for col_group, (u, m, r, num_u_rating, num_m_rating) in partition:
-            if u_f_p is None:
-                group = col_group
-                row_start = strata[col_group] * blk_row_size
-                col_start = col_group * blk_col_size
-                u_f_p = u_factor_b.value[row_start:row_start + blk_row_size, :]
-                m_f_p = m_factor_b.value[col_start:col_start + blk_col_size, :]
+        num_updated = 0
+
+        for u, m, r, u_rating_num, m_rating_num in partition:
+            # num_prev_update is retrieved automatically
+            learning_rate = pow(TAO_0 + num_prev_update + num_updated,
+                                -beta_value)
 
             # transform real indexes to partitioned factor matrix indexes
             user_index = (u - 1) % blk_row_size
             movie_index = (m - 1) % blk_col_size
 
-            pred_rating = np.dot(u_f_p[user_index, :], m_f_p[movie_index, :])
+            rating_diff = r - np.dot(
+                u_f_p[user_index, :], m_f_p[movie_index, :])
 
-            u_gradient = -2 * (r - pred_rating) * m_f_p[movie_index, :] + \
-                         2 * lambda_value / num_u_rating * \
-                         u_f_p[user_index, :]
-            # tmp = pow(TAO_0 + n + i, -beta_value)
-            u_f_p[user_index, :] -= learning_rate * \
-                                    u_gradient
+            u_gradient = -2 * rating_diff * m_f_p[movie_index, :] + \
+                2 * lambda_value / u_rating_num * u_f_p[user_index, :]
+            u_f_p[user_index, :] -= learning_rate * u_gradient
 
-            m_gradient = -2 * (r - pred_rating) * u_f_p[user_index, :] + \
-                         2 * lambda_value / num_m_rating * \
-                         m_f_p[movie_index, :]
-            m_f_p[movie_index, :] -= learning_rate * \
-                                     m_gradient
+            m_gradient = -2 * rating_diff * u_f_p[user_index, :] + \
+                2 * lambda_value / m_rating_num * m_f_p[movie_index, :]
+            m_f_p[movie_index, :] -= learning_rate * m_gradient
 
-            i += 1
+            num_updated += 1
 
-        yield group, u_f_p, m_f_p, i
+        yield col_group, u_f_p, m_f_p, num_updated
 
     # running DSGD!
-    n = 0
+    num_prev_update = 0
     for main_iter in range(num_iterations):
-
+        # broadcast factor matrices
         u_factor_b = sc.broadcast(u_factor)
         m_factor_b = sc.broadcast(m_factor)
 
-        # note in map, `preservesPartitioning` is True
         updated = ratings \
             .filter(lambda r: in_strata(r)) \
             .partitionBy(num_workers) \
-            .mapPartitions(update) \
+            .mapPartitionsWithIndex(update) \
             .collect()
 
         # aggregate the updates
@@ -215,7 +195,7 @@ if __name__ == '__main__':
             update_end = (column_group + 1) * blk_col_size
             m_factor[update_start:update_end, :] = updated_m_f
 
-            n += block_i
+            num_prev_update += block_i
 
         # shift the strata
         strata.append(strata.pop(0))
