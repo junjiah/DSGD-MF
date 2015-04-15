@@ -99,6 +99,9 @@ if __name__ == '__main__':
     # build W and H
     u_factor = rand(row_num, num_factors)
     m_factor = rand(col_num, num_factors)
+    # change the data type to save memory
+    u_factor = u_factor.astype(np.float32, copy=False)
+    m_factor = m_factor.astype(np.float32, copy=False)
 
     # extract info for strata/blocks
     blk_col_size = (col_num - 1) / num_workers + 1
@@ -113,10 +116,12 @@ if __name__ == '__main__':
                                      (r[0], r[1], r[2],
                                       rating_per_user_b.value[r[0]],
                                       rating_per_movie_b.value[r[1]]))) \
-        .cache()
+                     .cache()
+    rating_per_user_b.unpersist()                
+    rating_per_movie_b.unpersist()
 
-    # shipped to workers when necessary, this is small so not necessary
-    # to broadcast
+    # shipped to workers when necessary,
+    # this is small so not necessary to broadcast
     strata = range(num_workers)
 
     def in_strata(rating_entry):
@@ -146,7 +151,7 @@ if __name__ == '__main__':
 
         num_updated = 0
 
-        for u, m, r, u_rating_num, m_rating_num in partition:
+        for _, (u, m, r, u_rating_num, m_rating_num) in partition:
             # num_prev_update is retrieved automatically
             learning_rate = pow(TAO_0 + num_prev_update + num_updated,
                                 -beta_value)
@@ -159,11 +164,11 @@ if __name__ == '__main__':
                 u_f_p[user_index, :], m_f_p[movie_index, :])
 
             u_gradient = -2 * rating_diff * m_f_p[movie_index, :] + \
-                2 * lambda_value / u_rating_num * u_f_p[user_index, :]
+                         2 * lambda_value / u_rating_num * u_f_p[user_index, :]
             u_f_p[user_index, :] -= learning_rate * u_gradient
 
             m_gradient = -2 * rating_diff * u_f_p[user_index, :] + \
-                2 * lambda_value / m_rating_num * m_f_p[movie_index, :]
+                         2 * lambda_value / m_rating_num * m_f_p[movie_index, :]
             m_f_p[movie_index, :] -= learning_rate * m_gradient
 
             num_updated += 1
@@ -183,6 +188,8 @@ if __name__ == '__main__':
             .mapPartitionsWithIndex(update) \
             .collect()
 
+        u_factor_b.unpersist()
+        m_factor_b.unpersist()
         # aggregate the updates
         for column_group, updated_u_f, updated_m_f, block_i in updated:
             if column_group == -1:
@@ -209,12 +216,12 @@ if __name__ == '__main__':
     print
     print 'time usage: %s seconds' % (time.time() - start_time)
     # TODO: try another way to calculate the loss
-    calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+    # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
     # write parameters
     # with open(outputW_filepath, 'wb') as f:
-    #     for row in u_factor:
+    # for row in u_factor:
     #         f.write(','.join(map(str, row)) + '\n')
     #
     # with open(outputH_filepath, 'wb') as f:
