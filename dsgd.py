@@ -116,9 +116,8 @@ if __name__ == '__main__':
                                      (r[0], r[1], r[2],
                                       rating_per_user_b.value[r[0]],
                                       rating_per_movie_b.value[r[1]]))) \
+                     .partitionBy(num_workers) \
                      .cache()
-    rating_per_user_b.unpersist()                
-    rating_per_movie_b.unpersist()
 
     # shipped to workers when necessary,
     # this is small so not necessary to broadcast
@@ -184,7 +183,6 @@ if __name__ == '__main__':
 
         updated = ratings \
             .filter(lambda r: in_strata(r)) \
-            .partitionBy(num_workers) \
             .mapPartitionsWithIndex(update) \
             .collect()
 
@@ -209,14 +207,14 @@ if __name__ == '__main__':
         # output evaluation results
         print
         print 'iteration: %d' % main_iter
-        # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+        calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     # do simple evaluation
     print
     print
     print 'time usage: %s seconds' % (time.time() - start_time)
     # TODO: try another way to calculate the loss
-    # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+    calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
     # write parameters
