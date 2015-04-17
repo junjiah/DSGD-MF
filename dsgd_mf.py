@@ -2,10 +2,12 @@ import collections
 import os
 import sys
 import numpy as np
+import time
+import gc
 
 from numpy.random import rand
 from pyspark import SparkContext
-import time
+from guppy import hpy
 
 
 def get_rating(file_content):
@@ -97,12 +99,17 @@ if __name__ == '__main__':
     print 'collected corpus statistics, row num: %d, col num: %d' % (row_num,
                                                                      col_num)
 
+    gc.collect()
+    # print hpy().heap()
+
     # build W and H
     u_factor = rand(row_num, num_factors)
     m_factor = rand(col_num, num_factors)
     # change the data type to save memory
-    u_factor = u_factor.astype(np.float32, copy=False)
-    m_factor = m_factor.astype(np.float32, copy=False)
+    u_factor = u_factor.astype(np.float16, copy=False)
+    m_factor = m_factor.astype(np.float16, copy=False)
+
+    gc.collect()
 
     # determine block size
     blk_col_size = (col_num - 1) / num_workers + 1
@@ -149,6 +156,8 @@ if __name__ == '__main__':
     def update(block):
         # only one entry in each partition,
         # corresponding to this specific strata
+        gc.collect()
+
         (_, row_group, col_group), entries = block
 
         row_start = row_group * blk_row_size
@@ -180,6 +189,7 @@ if __name__ == '__main__':
 
             num_updated += 1
 
+        gc.collect()
         return row_group, col_group, u_f_p, m_f_p, num_updated
 
     # running DSGD!
@@ -194,8 +204,14 @@ if __name__ == '__main__':
             .map(update, preservesPartitioning=True) \
             .collect()
 
+        if main_iter == 0:
+            rating_per_user_b.unpersist()
+            rating_per_movie_b.unpersist()
+            rating_per_user, rating_per_movie = None, None
+
         u_factor_b.unpersist()
         m_factor_b.unpersist()
+        gc.collect()
         # aggregate the updates
         for row_group, col_group, updated_u, updated_m, iter_num in updated:
             update_start = row_group * blk_row_size
