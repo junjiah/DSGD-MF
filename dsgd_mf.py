@@ -171,11 +171,11 @@ if __name__ == '__main__':
                 u_f_p[user_index, :], m_f_p[movie_index, :])
 
             u_gradient = -2 * rating_diff * m_f_p[movie_index, :] + \
-                         2 * lambda_value / n_u * u_f_p[user_index, :]
+                2 * lambda_value / n_u * u_f_p[user_index, :]
             u_f_p[user_index, :] -= learning_rate * u_gradient
 
             m_gradient = -2 * rating_diff * u_f_p[user_index, :] + \
-                         2 * lambda_value / n_m * m_f_p[movie_index, :]
+                2 * lambda_value / n_m * m_f_p[movie_index, :]
             m_f_p[movie_index, :] -= learning_rate * m_gradient
 
             num_updated += 1
@@ -208,16 +208,13 @@ if __name__ == '__main__':
 
             num_prev_update += iter_num
 
-        # output evaluation results
-        # print
+        # EXPERIMENTS: output evaluation results
         # print 'iteration: %d' % main_iter
         # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
-    # do simple evaluation
-    # print
-    # print
-    # print 'time usage: %s seconds' % (time.time() - start_time)
-    # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+    # simple evaluation
+    print 'time usage: %s seconds' % (time.time() - start_time)
+    calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
     # write parameters
@@ -225,6 +222,6 @@ if __name__ == '__main__':
         for row in u_factor:
                 f.write(','.join(map(str, row)) + '\n')
 
-        with open(outputH_filepath, 'wb') as f:
-            for row in m_factor.T:
-                f.write(','.join(map(str, row)) + '\n')
+    with open(outputH_filepath, 'wb') as f:
+        for row in m_factor.T:
+            f.write(','.join(map(str, row)) + '\n')
