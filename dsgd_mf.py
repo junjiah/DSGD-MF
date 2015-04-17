@@ -4,7 +4,6 @@ import sys
 import numpy as np
 
 from numpy.random import rand
-from operator import itemgetter
 from pyspark import SparkContext, SparkConf, AccumulatorParam
 import time
 
@@ -39,7 +38,7 @@ if __name__ == '__main__':
 
     TAO_0 = 100
 
-    sc = SparkContext('local[8]', 'Distributed Stochastic Gradient Descent')
+    sc = SparkContext(appName='Distributed Stochastic Gradient Descent')
 
     if os.path.isfile(inputV_filepath):
         ratings = sc.textFile(inputV_filepath).map(
@@ -161,9 +160,8 @@ if __name__ == '__main__':
         # value of data is the rating entry
         for u, m, r, n_u, n_m in entries:
             # num_prev_update is retrieved automatically
-            # learning_rate = pow(TAO_0 + num_prev_update + num_updated,
-            #                     -beta_value)
-            learning_rate = 0.005
+            learning_rate = pow(TAO_0 + num_prev_update + num_updated,
+                                -beta_value)
 
             # transform real indexes to partitioned factor matrix indexes
             user_index = (u - 1) % blk_row_size
@@ -211,23 +209,22 @@ if __name__ == '__main__':
             num_prev_update += iter_num
 
         # output evaluation results
-        print
-        print 'iteration: %d' % main_iter
+        # print
+        # print 'iteration: %d' % main_iter
         # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     # do simple evaluation
-    print
-    print
-    print 'time usage: %s seconds' % (time.time() - start_time)
-    # TODO: try another way to calculate the loss
+    # print
+    # print
+    # print 'time usage: %s seconds' % (time.time() - start_time)
     # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
     # write parameters
-    # with open(outputW_filepath, 'wb') as f:
-    # for row in u_factor:
-    #         f.write(','.join(map(str, row)) + '\n')
-    #
-    # with open(outputH_filepath, 'wb') as f:
-    #     for row in m_factor.T:
-    #         f.write(','.join(map(str, row)) + '\n')
+    with open(outputW_filepath, 'wb') as f:
+        for row in u_factor:
+                f.write(','.join(map(str, row)) + '\n')
+
+        with open(outputH_filepath, 'wb') as f:
+            for row in m_factor.T:
+                f.write(','.join(map(str, row)) + '\n')
