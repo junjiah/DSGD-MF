@@ -4,7 +4,7 @@ import sys
 import numpy as np
 
 from numpy.random import rand
-from pyspark import SparkContext, SparkConf, AccumulatorParam
+from pyspark import SparkContext
 import time
 
 
