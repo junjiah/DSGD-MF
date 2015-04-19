@@ -207,7 +207,8 @@ if __name__ == '__main__':
         if main_iter == 0:
             rating_per_user_b.unpersist()
             rating_per_movie_b.unpersist()
-            rating_per_user, rating_per_movie = None, None
+
+            matrix_stats, rating_per_user, rating_per_movie = [None] * 3
 
         u_factor_b.unpersist()
         m_factor_b.unpersist()
@@ -229,8 +230,8 @@ if __name__ == '__main__':
         # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     # simple evaluation
-    print 'time usage: %s seconds' % (time.time() - start_time)
-    calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
+    # print 'time usage: %s seconds' % (time.time() - start_time)
+    # calculate_loss(np.dot(u_factor, m_factor.T), ratings.collect())
 
     sc.stop()
     # write parameters
