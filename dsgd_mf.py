@@ -125,7 +125,7 @@ if __name__ == '__main__':
     # add N_i, N_j for each rating entry
     rating_per_user_b = sc.broadcast(rating_per_user)
     rating_per_movie_b = sc.broadcast(rating_per_movie)
-    # step1: map to :(<col-group>, (<u> <m> <r> <N_i> <N_j>))
+    # map to :(<col-group>, (<u> <m> <r> <N_i> <N_j>))
     ratings = ratings.map(lambda r: ((r[1] - 1) / blk_col_size,
                                      # value is a 5-element tuple
                                      (r[0], r[1], r[2],
